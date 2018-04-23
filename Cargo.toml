@@ -1,0 +1,15 @@
+[package]
+name = "chasset"
+version = "0.1.0"
+authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
+description = "Content hash addressed asset management"
+
+[dependencies]
+blake2 = "0.7"
+data-encoding = "2.1.1"
+serde = "1"
+serde_derive = "1"
+bincode = "1"
+tokio = "0.1.5"
+futures  = "0.1"
+rand = "0.5.0-pre.1"
