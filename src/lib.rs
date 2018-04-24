@@ -3,9 +3,8 @@ extern crate data_encoding;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-extern crate bincode;
 extern crate futures;
-extern crate tokio;
+extern crate tokio_threadpool;
 extern crate rand;
 
 pub mod loose_files;
