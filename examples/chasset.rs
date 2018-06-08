@@ -34,7 +34,7 @@ enum Command {
 
 fn main() -> io::Result<()> {
     let opt = Opt::from_args();
-    let mut repo = LooseFiles::open(opt.prefix.clone())?;
+    let repo = LooseFiles::open(opt.prefix.clone())?;
     match opt.cmd {
         Command::Cat { hash } => { match hash {
             None => {
