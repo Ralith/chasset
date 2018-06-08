@@ -5,7 +5,7 @@ use std::io;
 use std::fs::{self, File};
 
 use data_encoding::BASE32_NOPAD;
-use rand::{StdRng, FromEntropy, Rng};
+use rand;
 
 use {Hash, HashKind, Hasher};
 
@@ -16,14 +16,13 @@ use {Hash, HashKind, Hasher};
 /// reading large numbers of assets.
 pub struct LooseFiles {
     prefix: PathBuf,
-    rng: StdRng,
 }
 
 impl LooseFiles {
     /// Open a repository located at `prefix`, creating it if necessary.
     pub fn open(prefix: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(&prefix)?;
-        Ok(Self { prefix, rng: StdRng::from_entropy() })
+        Ok(Self { prefix })
     }
 
     /// Access the asset identified by `hash`.
@@ -41,7 +40,7 @@ impl LooseFiles {
     }
 
     /// Create a `Writer` for streaming data into the repository in constant memory.
-    pub fn make_writer(&mut self) -> io::Result<Writer> {
+    pub fn make_writer(&self) -> io::Result<Writer> {
         let mut path = self.prefix.join("temp");
         match fs::create_dir(&path) {
             Ok(()) => {}
@@ -49,7 +48,7 @@ impl LooseFiles {
             Err(e) => { return Err(e); }
         }
         loop {
-            path.push(format!("{:08X}", self.rng.gen::<u64>()));
+            path.push(format!("{:08X}", rand::random::<u64>()));
             match fs::OpenOptions::new().read(false).write(true).create_new(true).open(&path) {
                 Ok(file) => { return Writer::new(file, path); }
                 Err(ref e) if e.kind() == io::ErrorKind::AlreadyExists => { path.pop(); continue; }
@@ -59,7 +58,7 @@ impl LooseFiles {
     }
 
     /// Write `data` directly into the repository.
-    pub fn put(&mut self, mut data: &[u8]) -> io::Result<Hash> {
+    pub fn put(&self, mut data: &[u8]) -> io::Result<Hash> {
         let mut writer = self.make_writer()?;
         io::copy(&mut data, &mut writer)?;
         writer.store()
