@@ -145,7 +145,7 @@ impl Hash {
     /// Construct a hash that was computed using the `kind` algorithm to produce `bytes`, encoded human-readably.
     ///
     /// Returns `Err(_)` if `bytes` is not a valid chasset human-readable hash value for `kind`.
-    pub fn parse(kind: HashKind, bytes: &str) -> Result<Self, data_encoding::DecodeError> {
+    fn parse(kind: HashKind, bytes: &str) -> Result<Self, data_encoding::DecodeError> {
         match kind {
             HashKind::Blake2b => {
                 let mut data = [0; 25];
