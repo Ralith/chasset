@@ -2,13 +2,23 @@
 name = "chasset"
 version = "0.1.0"
 authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
-description = "Content hash addressed asset management"
+license = "MIT/Apache-2.0"
+repository = "https://github.com/Ralith/chasset"
+description = "Content-addressed asset management"
+readme = "README.md"
+keywords = ["asset"]
+categories = [ "filesystem", "games", "database-implementations" ]
+
+[badges]
+maintenance = { status = "experimental" }
 
 [dependencies]
 blake2 = "0.7"
 data-encoding = "2.1.1"
 serde = "1"
 serde_derive = "1"
-tokio-threadpool = "0.1.2"
-futures  = "0.1"
-rand = "0.5.0-pre.1"
+rand = "0.5"
+failure = "0.1"
+
+[dev-dependencies]
+structopt = "0.2"

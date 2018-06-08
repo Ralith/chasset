@@ -1,59 +1,80 @@
+//! Content-addressed asset storage
+
+#![warn(missing_docs)]
+
 extern crate blake2;
 extern crate data_encoding;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
-extern crate futures;
-extern crate tokio_threadpool;
 extern crate rand;
+#[macro_use]
+extern crate failure;
 
 pub mod loose_files;
 
 pub use loose_files::LooseFiles;
 
-use std::fmt;
+use std::{fmt, io};
 use std::str::FromStr;
 
 use blake2::digest::{Input, VariableOutput};
-use serde::{de, Serialize, Serializer, Deserialize, Deserializer};
-use serde::de::{VariantAccess, Error};
+use serde::{Serialize, Serializer, Deserialize, Deserializer};
+use serde::de::Error;
+use serde::ser::SerializeSeq;
 
 const BLAKE2B_LEN: usize = 25;
 
-/// A hash uniquely identifying some data
+/// A hash uniquely identifying some data.
+///
+/// Hashes have forwards-compatible serialization, and can be encoded in both binary and human-readable forms. New types
+/// of hash may be added in the future, but none will ever be removed.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Hash {
+    /// A 200-bit blake2b hash.
+    ///
+    /// This size is evenly divisible into both bytes and base32 code units, allowing for efficient encoding for both
+    /// machine and human consumption.
     Blake2b([u8; BLAKE2B_LEN]),
 }
 
 impl Serialize for Hash {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
         where S: Serializer
     {
-        use self::Hash::*;
-        if serializer.is_human_readable() {
-            serializer.serialize_str(&self.to_string())
+        if s.is_human_readable() {
+            s.serialize_str(&self.to_string())
         } else {
-            match *self {
-                Blake2b(ref xs) => serializer.serialize_newtype_variant("Blake2b", self.algo() as u32, "Hash", xs),
-            }
+            let mut seq = s.serialize_seq(Some(self.bytes().len() + 1))?;
+            seq.serialize_element(&self.kind())?;
+            for x in self.bytes() { seq.serialize_element(x)?; }
+            seq.end()
         }
     }
 }
 
+/// Errors in the human-readable hash encoding.
+#[derive(Debug, Fail)]
+pub enum HashParseError {
+    /// Missing delimiting ":".
+    #[fail(display = "missing delimiting \":\"")]
+    MissingDelimiter,
+    /// Unknown hash kind.
+    ///
+    /// May occur when parsing a hash encoded by a future version of this library.
+    #[fail(display = "unknown hash kind: {}", _0)]
+    UnknownKind(String),
+    /// Malformed base32 hash value.
+    #[fail(display = "malformed hash value: {}", _0)]
+    MalformedValue(data_encoding::DecodeError),
+}
+
 impl FromStr for Hash {
-    type Err = &'static str;
+    type Err = HashParseError;
     fn from_str(s: &str) -> ::std::result::Result<Self, Self::Err> {
-        let delim = s.find(':').ok_or("missing delimiting colon")?;
-        match &s[0..delim] {
-            "blake2b" => {
-                let mut data = [0; 25];
-                // TODO: Don't discard detailed error
-                data_encoding::BASE32_NOPAD.decode_mut(&s.as_bytes()[delim+1..], &mut data).map_err(|_| "malformed base32")?;
-                Ok(Hash::Blake2b(data))
-            }
-            _ => Err("unknown hash type"),
-        }
+        let delim = s.find(':').ok_or(HashParseError::MissingDelimiter)?;
+        let kind = s[0..delim].parse().map_err(|UnknownKind| HashParseError::UnknownKind(s[0..delim].into()))?;
+        Hash::parse(kind, &s[delim+1..]).map_err(HashParseError::MalformedValue)
     }
 }
 
@@ -61,75 +82,88 @@ impl<'a> Deserialize<'a> for Hash {
     fn deserialize<D>(d: D) -> Result<Self, D::Error>
         where D: Deserializer<'a>
     {
-        struct StrVisitor;
-
-        impl<'de> de::Visitor<'de> for StrVisitor {
-            type Value = Hash;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                write!(formatter, "a string containing a type-tagged base 32 content hash")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Hash, E>
-                where E: de::Error
-            {
-                Hash::from_str(value).map_err(E::custom)
-            }
-        }
-
-        struct Visitor;
-
-        impl<'de> de::Visitor<'de> for Visitor {
-            type Value = Hash;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                write!(formatter, "a content hash")
-            }
-
-            fn visit_enum<A>(self, data: A) -> Result<Hash, A::Error>
-                where A: de::EnumAccess<'de>
-            {
-                let (algo, variant) = data.variant()?;
-                let data = variant.newtype_variant::<&'de [u8]>()?;
-                Hash::new(algo, data).ok_or(A::Error::invalid_length(data.len(), &"a length suitable for the specified hash type"))
-            }
-        }
-
         if d.is_human_readable() {
-            d.deserialize_str(StrVisitor)
+            let x = <&'a str>::deserialize(d)?;
+            Hash::from_str(x).map_err(D::Error::custom)
         } else {
-            d.deserialize_enum("Hash", &["Blake2b"], Visitor)
+            struct Visitor;
+            impl<'de> serde::de::Visitor<'de> for Visitor {
+                type Value = Hash;
+
+                fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    write!(f, "a content hash")
+                }
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                    where A: serde::de::SeqAccess<'de>,
+                {
+                    let kind = seq.next_element::<HashKind>()?.ok_or_else(|| A::Error::missing_field("kind"))?;
+                    use self::HashKind::*;
+                    match kind {
+                        Blake2b => {
+                            let mut data = [0; BLAKE2B_LEN];
+                            for i in 0..BLAKE2B_LEN { data[i] = seq.next_element::<u8>()?.ok_or_else(|| A::Error::invalid_length(i, &"25 bytes"))?; }
+                            Ok(Hash::Blake2b(data))
+                        }
+                    }
+                }
+            }
+
+            d.deserialize_seq(Visitor)
         }
     }
 }
 
 impl fmt::Display for Hash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}:{}", self.algo(), data_encoding::BASE32_NOPAD.encode(self.bytes()))
+        write!(f, "{}:{}", self.kind(), data_encoding::BASE32_NOPAD.encode(self.bytes()))
     }
 }
 
+/// Unknown hash kind.
+#[derive(Debug, Fail)]
+#[fail(display = "invalid hash length for given hash kind")]
+pub struct InvalidLength;
+
 impl Hash {
-    pub fn new(algo: HashAlgo, bytes: &[u8]) -> Option<Hash> {
-        match algo {
-            HashAlgo::Blake2b => {
+    /// Construct a hash that was computed using the `kind` algorithm to produce `bytes`.
+    ///
+    /// Returns `Err(InvalidLength)` if `bytes` does not match the output length of `kind`.
+    pub fn from_bytes(kind: HashKind, bytes: &[u8]) -> Result<Self, InvalidLength> {
+        match kind {
+            HashKind::Blake2b => {
                 if bytes.len() != BLAKE2B_LEN {
-                    return None;
+                    return Err(InvalidLength);
                 }
                 let mut result = [0; BLAKE2B_LEN];
                 result.copy_from_slice(bytes);
-                Some(Hash::Blake2b(result))
+                Ok(Hash::Blake2b(result))
             }
         }
     }
 
-    pub fn algo(&self) -> HashAlgo {
-        use self::Hash::*;
-        match *self {
-            Blake2b(_) => HashAlgo::Blake2b,
+    /// Construct a hash that was computed using the `kind` algorithm to produce `bytes`, encoded human-readably.
+    ///
+    /// Returns `Err(_)` if `bytes` is not a valid chasset human-readable hash value for `kind`.
+    pub fn parse(kind: HashKind, bytes: &str) -> Result<Self, data_encoding::DecodeError> {
+        match kind {
+            HashKind::Blake2b => {
+                let mut data = [0; 25];
+                data_encoding::BASE32_NOPAD.decode_mut(bytes.as_bytes(), &mut data).map_err(|e| e.error)?;
+                Ok(Hash::Blake2b(data))
+            }
         }
     }
 
+    /// Get the `HashKind` of this value.
+    pub fn kind(&self) -> HashKind {
+        use self::Hash::*;
+        match *self {
+            Blake2b(_) => HashKind::Blake2b,
+        }
+    }
+
+    /// Get the actual hash.
     pub fn bytes(&self) -> &[u8] {
         use self::Hash::*;
         match *self {
@@ -138,40 +172,82 @@ impl Hash {
     }
 }
 
-/// The algorithm used by a hash
+/// The algorithm used by a hash.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum HashAlgo {
+#[serde(rename_all = "lowercase")]
+pub enum HashKind {
     /// 200-bit blake2b hash
     Blake2b,
 }
 
-impl fmt::Display for HashAlgo {
+impl fmt::Display for HashKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.pad(self.name())
     }
 }
 
-impl HashAlgo {
+/// Unknown hash kind.
+#[derive(Debug, Fail)]
+#[fail(display = "unknown kind")]
+pub struct UnknownKind;
+
+impl FromStr for HashKind {
+    type Err = UnknownKind;
+    fn from_str(s: &str) -> ::std::result::Result<Self, Self::Err> {
+        use self::HashKind::*;
+        Ok(match s {
+            "blake2b" => Blake2b,
+            _ => { return Err(UnknownKind); }
+        })
+    }
+}
+
+impl HashKind {
+    /// Concise name for the algorithm used.
     pub fn name(&self) -> &'static str {
-        use self::HashAlgo::*;
+        use self::HashKind::*;
         match *self {
             Blake2b => "blake2b",
         }
     }
 }
 
-/// Helper to compute a hash of the preferred type
+/// Helper to compute a hash of the currently recommended type.
 #[derive(Debug, Clone)]
 pub struct Hasher {
     inner: blake2::Blake2b,
 }
 
+impl io::Write for Hasher {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.process(&buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
+
 impl Hasher {
+    /// Create an empty hasher.
     pub fn new() -> Self { Self { inner: blake2::Blake2b::new(BLAKE2B_LEN).unwrap() } }
+    /// Incrementally hash `bytes`.
     pub fn process(&mut self, bytes: &[u8]) { self.inner.process(bytes); }
+    /// Get the hash of all `process`ed bytes.
     pub fn result(self) -> Hash {
         let mut buf = [0; BLAKE2B_LEN];
         self.inner.variable_result(&mut buf).unwrap();
         Hash::Blake2b(buf)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn string_roundtrip() {
+        let hash = Hash::Blake2b([0xAB; 25]);
+        let x = hash.to_string();
+        let hash2 = x.parse::<Hash>().unwrap();
+        assert_eq!(hash, hash2);
     }
 }

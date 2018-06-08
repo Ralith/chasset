@@ -1,49 +1,53 @@
+//! Tools for a repository that stores one file per asset.
+
 use std::path::{Path, PathBuf};
 use std::io;
 use std::fs::{self, File};
 
-use tokio_threadpool;
-use futures::{Future, future};
-use futures::sync::oneshot;
 use data_encoding::BASE32_NOPAD;
 use rand::{StdRng, FromEntropy, Rng};
 
-use {Hash, Hasher};
+use {Hash, HashKind, Hasher};
 
-/// A mutable content repository that stores each asset as a separate file, named after the hash.
+/// A repository that stores each asset as a separate file.
+///
+/// This type of repository supports easy insertion of new assets, even when being accessed by multiple processes
+/// simultaneously. On the other hand, traversing the filesystem for each access may lead to suboptimal performance when
+/// reading large numbers of assets.
 pub struct LooseFiles {
-    pool: tokio_threadpool::Sender,
     prefix: PathBuf,
     rng: StdRng,
 }
 
 impl LooseFiles {
-    pub fn new(pool: tokio_threadpool::Sender, prefix: PathBuf) -> io::Result<Self> {
+    /// Open a repository located at `prefix`, creating it if necessary.
+    pub fn open(prefix: PathBuf) -> io::Result<Self> {
         fs::create_dir_all(&prefix)?;
-        Ok(Self { pool, prefix, rng: StdRng::from_entropy() })
+        Ok(Self { prefix, rng: StdRng::from_entropy() })
     }
 
-    pub fn get(&self, hash: &Hash) -> Box<Future<Item=Box<[u8]>, Error=io::Error>> {
-        let (send, recv) = oneshot::channel();
+    /// Access the asset identified by `hash`.
+    ///
+    /// The returned `File` is in read-only mode.
+    pub fn get(&self, hash: &Hash) -> io::Result<File> {
         let path = path_for(&self.prefix, hash);
-        self.pool.spawn(future::lazy(move || {
-            send.send(get(path)).map_err(|_| ())
-        })).expect("threadpool full");
-        Box::new(recv.then(|x| x.expect("threadpool terminated unexpectedly")))
+        File::open(path)
     }
 
-    pub fn contains(&self, hash: &Hash) -> Box<Future<Item=bool, Error=io::Error>> {
-        let (send, recv) = oneshot::channel();
+    /// Determine whether the asset identified by `hash` exists in the repository.
+    pub fn contains(&self, hash: &Hash) -> bool {
         let path = path_for(&self.prefix, hash);
-        self.pool.spawn(future::lazy(move || {
-            send.send(path.exists()).map_err(|_| ())
-        })).expect("threadpool full");
-        Box::new(recv.then(|x| Ok(x.expect("threadpool terminated unexpectedly"))))
+        path.exists()
     }
 
+    /// Create a `Writer` for streaming data into the repository in constant memory.
     pub fn make_writer(&mut self) -> io::Result<Writer> {
         let mut path = self.prefix.join("temp");
-        fs::create_dir(&path)?;
+        match fs::create_dir(&path) {
+            Ok(()) => {}
+            Err(ref e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => { return Err(e); }
+        }
         loop {
             path.push(format!("{:08X}", self.rng.gen::<u64>()));
             match fs::OpenOptions::new().read(false).write(true).create_new(true).open(&path) {
@@ -54,40 +58,71 @@ impl LooseFiles {
         }
     }
 
-    pub fn put(&mut self, data: Box<[u8]>) -> Box<Future<Item=Hash, Error=io::Error>> {
-        let (send, recv) = oneshot::channel();
-        let writer = self.make_writer();
-        self.pool.spawn(future::lazy(move || {
-            send.send(writer.and_then(|writer| put(data, writer))).map_err(|_| ())
-        })).expect("threadpool full");
-        Box::new(recv.then(|x| x.expect("threadpool terminated unexpectedly")))
+    /// Write `data` directly into the repository.
+    pub fn put(&mut self, mut data: &[u8]) -> io::Result<Hash> {
+        let mut writer = self.make_writer()?;
+        io::copy(&mut data, &mut writer)?;
+        writer.store()
+    }
+
+    /// Enumerate assets stored in the repository.
+    ///
+    /// This should only be used for diagnostic purposes. It almost never makes sense to access an asset you don't
+    /// already know the hash of.
+    pub fn list(&self) -> impl Iterator<Item=Hash> {
+        fs::read_dir(&self.prefix).ok().into_iter()
+            .flat_map(|x| x.flat_map(|result| result.into_iter()))
+            .filter_map(|x| {
+                let name = x.file_name();
+                if &name != "temp" {
+                    Some(list_hash(x.path()))
+                } else {
+                    None
+                }
+            })
+            .flat_map(|x| x)
     }
 }
 
-fn path_for(base: &Path, hash: &Hash) -> PathBuf {
+fn list_hash(hash_dir: PathBuf) -> impl Iterator<Item=Hash> {
+    hash_dir.file_name().unwrap().to_str().map(|x| x.to_string()).into_iter()
+        .flat_map(|x| x.parse::<HashKind>().into_iter())
+        .flat_map(move |kind| {
+            fs::read_dir(&hash_dir).into_iter()
+                .flat_map(|x| x.into_iter())
+                .flat_map(|x| x.into_iter())
+                .flat_map(move |x| list_leaf(kind, x.path()))
+        })
+}
+
+fn list_leaf(kind: HashKind, leaf_dir: PathBuf) -> impl Iterator<Item=Hash> {
+    leaf_dir.file_name().unwrap().to_str().map(|x| x.to_string()).into_iter()
+        .flat_map(move |start| {
+            fs::read_dir(&leaf_dir).into_iter()
+                .flat_map(|x| x.into_iter())
+                .flat_map(|x| x.into_iter())
+                .flat_map(move |file| {
+                    let start = start.clone();
+                    file.file_name().to_str().map(|name| {
+                        let full = start.to_owned() + name;
+                        Hash::parse(kind, &full).into_iter()
+                    }).into_iter().flat_map(|x| x)
+                })
+        })
+}
+
+fn path_for(prefix: &Path, hash: &Hash) -> PathBuf {
     let s = BASE32_NOPAD.encode(hash.bytes());
     let dir = &s[0..2];
     let file = &s[2..];
-    base.join(hash.algo().name()).join(dir).join(file)
+    prefix.join(hash.kind().name()).join(dir).join(file)
 }
 
-
-
-fn get(path: PathBuf) -> io::Result<Box<[u8]>> {
-    let mut file = File::open(path)?;
-    let meta = file.metadata()?;
-    let mut buf = Vec::new();
-    buf.reserve_exact(meta.len() as usize);
-    io::copy(&mut file, &mut buf)?;
-    Ok(buf.into())
-}
-
-fn put(data: Box<[u8]>, mut writer: Writer) -> io::Result<Hash> {
-    let mut cursor = io::Cursor::new(&data);
-    io::copy(&mut cursor, &mut writer)?;
-    writer.store()
-}
-
+/// A staging area for streaming data into the repository in constant memory.
+///
+/// Data written into a `Writer` is used to update a hash computation and buffered in a temporary file on disk.
+///
+/// `store` must be called to commit data to the repository. Otherwise, it will be deleted when the `Writer` is dropped.
 #[derive(Debug)]
 pub struct Writer {
     hasher: Option<Hasher>,
@@ -106,7 +141,7 @@ impl Writer {
         Ok(Writer { hasher: Some(Hasher::new()), path, file })
     }
 
-    /// Returns the hash of the data
+    /// Commits the written data to the repository.
     pub fn store(mut self) -> io::Result<Hash> {
         let hash = self.hasher.take().unwrap().result();
         let prefix = self.path.parent().unwrap().parent().unwrap();
