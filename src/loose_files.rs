@@ -3,17 +3,28 @@
 use std::path::{Path, PathBuf};
 use std::io;
 use std::fs::{self, File};
+use std::sync::Arc;
 
 use data_encoding::BASE32_NOPAD;
 use rand;
+use memmap::Mmap;
 
-use {Hash, HashKind, Hasher};
+use {Hash, HashKind, Hasher, Asset};
 
 /// A repository that stores each asset as a separate file.
 ///
 /// This type of repository supports easy insertion of new assets, even when being accessed by multiple processes
 /// simultaneously. On the other hand, traversing the filesystem for each access may lead to suboptimal performance when
 /// reading large numbers of assets.
+///
+/// The repository is organized into one directory per hash type, each containing one file per asset identified by that
+/// hash, split into subdirectories to reduce the number of files in a single directory, as large numbers reduce
+/// performance on some systems. A "temp" directory is placed adjacent to the hash directories to buffer incomplete
+/// streaming writes.
+///
+/// Unexpected interruptions (such as power loss) may cause incomplete writes to be left in the "temp" directory. Any
+/// file in the "temp" directory which is not currently open by any process arose from such an event, and may be safely
+/// deleted.
 pub struct LooseFiles {
     prefix: PathBuf,
 }
@@ -28,9 +39,14 @@ impl LooseFiles {
     /// Access the asset identified by `hash`.
     ///
     /// The returned `File` is in read-only mode.
-    pub fn get(&self, hash: &Hash) -> io::Result<File> {
+    pub fn get(&self, hash: &Hash) -> io::Result<Asset> {
         let path = path_for(&self.prefix, hash);
-        File::open(path)
+        let map = Arc::new(unsafe { Mmap::map(&File::open(path)?) }?);
+        Ok(Asset {
+            start: 0,
+            len: map.len(),
+            map,
+        })
     }
 
     /// Determine whether the asset identified by `hash` exists in the repository.

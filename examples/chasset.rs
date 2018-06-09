@@ -3,7 +3,7 @@ extern crate chasset;
 extern crate structopt;
 
 use std::path::PathBuf;
-use std::io;
+use std::io::{self, Write};
 
 use structopt::StructOpt;
 
@@ -13,8 +13,8 @@ use chasset::*;
 #[structopt(name = "chasset")]
 struct Opt {
     #[structopt(parse(from_os_str))]
-    /// Location of the chasset file repository
-    prefix: PathBuf,
+    /// Location of the chasset repository
+    path: PathBuf,
     #[structopt(subcommand)]
     cmd: Command,
 }
@@ -34,7 +34,7 @@ enum Command {
 
 fn main() -> io::Result<()> {
     let opt = Opt::from_args();
-    let repo = LooseFiles::open(opt.prefix.clone())?;
+    let repo = LooseFiles::open(opt.path.clone())?;
     match opt.cmd {
         Command::Cat { hash } => { match hash {
             None => {
@@ -45,9 +45,8 @@ fn main() -> io::Result<()> {
                 println!("{}", hash);
             }
             Some(x) => {
-                let mut file = repo.get(&x)?;
-                let stdout = io::stdout();
-                io::copy(&mut file, &mut stdout.lock())?;
+                let mut asset = repo.get(&x)?;
+                io::stdout().write_all(&asset)?;
             }
         }}
         Command::Ls => {

@@ -19,6 +19,8 @@ serde = "1"
 serde_derive = "1"
 rand = "0.5"
 failure = "0.1"
+carchive = { git = "https://github.com/Ralith/carchive", rev = "68d49382" }
+memmap = "0.6.2"
 
 [dev-dependencies]
 structopt = "0.2"

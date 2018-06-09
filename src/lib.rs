@@ -10,18 +10,24 @@ extern crate serde_derive;
 extern crate rand;
 #[macro_use]
 extern crate failure;
+extern crate carchive;
+extern crate memmap;
 
 pub mod loose_files;
-
 pub use loose_files::LooseFiles;
+
+pub mod archive;
+pub use archive::ArchiveSet;
 
 use std::{fmt, io};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use blake2::digest::{Input, VariableOutput};
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
 use serde::de::Error;
 use serde::ser::SerializeSeq;
+use memmap::Mmap;
 
 const BLAKE2B_LEN: usize = 25;
 
@@ -175,6 +181,7 @@ impl Hash {
 /// The algorithm used by a hash.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[repr(u16)]
 pub enum HashKind {
     /// 200-bit blake2b hash
     Blake2b,
@@ -210,6 +217,26 @@ impl HashKind {
             Blake2b => "blake2b",
         }
     }
+
+    /// Length of hash values used for this algorithm.
+    pub fn len(&self) -> usize {
+        use self::HashKind::*;
+        match *self {
+            Blake2b => BLAKE2B_LEN,
+        }
+    }
+
+    /// Integer ID of this kind.
+    pub fn id(&self) -> u16 { *self as u16 }
+
+    /// Reconstruct from a value previously obtained with `id`.
+    pub fn from_id(x: u16) -> Option<Self> {
+        use self::HashKind::*;
+        Some(match x {
+            0 => Blake2b,
+            _ => return None
+        })
+    }
 }
 
 /// Helper to compute a hash of the currently recommended type.
@@ -240,11 +267,28 @@ impl Hasher {
     }
 }
 
+/// A refcounted, memory-mapped asset from disk.
+#[derive(Debug, Clone)]
+pub struct Asset {
+    map: Arc<Mmap>,
+    start: usize,
+    len: usize,
+}
+
+impl AsRef<[u8]> for Asset {
+    fn as_ref(&self) -> &[u8] { &self.map.as_ref()[self.start..self.start+self.len] }
+}
+
+impl ::std::ops::Deref for Asset {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.map[self.start..self.start+self.len] }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     #[test]
-    fn string_roundtrip() {
+    fn hash_string_roundtrip() {
         let hash = Hash::Blake2b([0xAB; 25]);
         let x = hash.to_string();
         let hash2 = x.parse::<Hash>().unwrap();
