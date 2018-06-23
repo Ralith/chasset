@@ -56,6 +56,17 @@ impl ArchiveSet {
         }
         None
     }
+
+    /// Enumerate assets stored in the repository.
+    ///
+    /// This should only be used for diagnostic purposes. It almost never makes sense to access an asset you don't
+    /// already know the hash of.
+    pub fn list<'a>(&'a self) -> impl Iterator<Item=Hash> + 'a {
+        self.archives.iter()
+            .flat_map(|(&kind, xs)| xs.iter().flat_map(move |archive| {
+                archive.iter().map(move |(key, _)| Hash::from_bytes(kind, key).expect("archives with invalid key lengths aren't opened"))
+            }))
+    }
 }
 
 struct ArcMap(Arc<Mmap>);
