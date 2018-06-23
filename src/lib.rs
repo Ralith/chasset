@@ -28,6 +28,7 @@ use serde::{Serialize, Serializer, Deserialize, Deserializer};
 use serde::de::Error;
 use serde::ser::SerializeSeq;
 use memmap::Mmap;
+use data_encoding::{DecodeError, BASE32_NOPAD};
 
 const BLAKE2B_LEN: usize = 25;
 
@@ -151,11 +152,12 @@ impl Hash {
     /// Construct a hash that was computed using the `kind` algorithm to produce `bytes`, encoded human-readably.
     ///
     /// Returns `Err(_)` if `bytes` is not a valid chasset human-readable hash value for `kind`.
-    fn parse(kind: HashKind, bytes: &str) -> Result<Self, data_encoding::DecodeError> {
+    fn parse(kind: HashKind, bytes: &str) -> Result<Self, DecodeError> {
         match kind {
             HashKind::Blake2b => {
+                if BASE32_NOPAD.decode_len(bytes.len())? != 25 { return Err(DecodeError { position: 0, kind: data_encoding::DecodeKind::Length }); }
                 let mut data = [0; 25];
-                data_encoding::BASE32_NOPAD.decode_mut(bytes.as_bytes(), &mut data).map_err(|e| e.error)?;
+                BASE32_NOPAD.decode_mut(bytes.as_bytes(), &mut data).map_err(|e| e.error)?;
                 Ok(Hash::Blake2b(data))
             }
         }
@@ -293,5 +295,11 @@ mod test {
         let x = hash.to_string();
         let hash2 = x.parse::<Hash>().unwrap();
         assert_eq!(hash, hash2);
+    }
+
+    #[test]
+    fn parse_err() {
+        assert!(Hash::from_str("blake2b:00000").is_err());
+        assert!(Hash::from_str("notarealhash:42").is_err());
     }
 }
