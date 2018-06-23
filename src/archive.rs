@@ -29,11 +29,14 @@ impl ArchiveSet {
             let file = File::open(entry.path())?;
             let map = ArcMap(Arc::new(unsafe { Mmap::map(&file) }?));
             let archive = carchive::Reader::new(map)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.context("invalid archive").compat()))?;
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.compat()))?;
             let kind = {
                 let x = archive.extensions(2).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid archive"))?;
                 HashKind::from_id(x[0] as u16 | (x[1] as u16) << 8).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "archive uses unknown hash kind"))?
             };
+            if kind.len() != archive.key_len() as usize {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "archive key length doesn't match hash type"));
+            }
             archives.entry(kind).or_insert_with(Vec::new).push(archive);
         }
         Ok(Self { archives })
