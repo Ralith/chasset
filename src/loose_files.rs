@@ -77,7 +77,7 @@ impl LooseFiles {
     pub fn put(&self, mut data: &[u8]) -> io::Result<Hash> {
         let mut writer = self.make_writer()?;
         io::copy(&mut data, &mut writer)?;
-        writer.store()
+        writer.store().map(|(hash, _)| hash)
     }
 
     /// Enumerate assets stored in the repository.
@@ -156,15 +156,20 @@ impl Writer {
         Ok(Writer { hasher: Some(Hasher::new()), path, file })
     }
 
-    /// Commits the written data to the repository.
-    pub fn store(mut self) -> io::Result<Hash> {
+    /// Commits the written data to the repository. The `bool` is true iff the data was not already there.
+    pub fn store(mut self) -> io::Result<(Hash, bool)> {
         let hash = self.hasher.take().unwrap().result();
         let prefix = self.path.parent().unwrap().parent().unwrap();
         let dest = path_for(prefix, &hash);
-        fs::create_dir_all(dest.parent().unwrap())?;
-        self.file.sync_data()?;
-        fs::rename(&self.path, &dest)?;
-        Ok(hash)
+        if dest.exists() {
+            let _ = fs::remove_file(&self.path);
+            Ok((hash, false))
+        } else {
+            fs::create_dir_all(dest.parent().unwrap())?;
+            self.file.sync_data()?;
+            fs::rename(&self.path, &dest)?;
+            Ok((hash, true))
+        }
     }
 }
 

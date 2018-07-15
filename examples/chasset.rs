@@ -59,7 +59,7 @@ fn main() -> io::Result<()> {
                     let mut stage = repo.make_writer()?;
                     let stdin = io::stdin();
                     io::copy(&mut stdin.lock(), &mut stage)?;
-                    let hash = stage.store()?;
+                    let (hash, _) = stage.store()?;
                     println!("{}", hash);
                 }
                 Some(x) => {
