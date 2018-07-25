@@ -153,7 +153,7 @@ impl Drop for Writer {
 
 impl Writer {
     fn new(file: File, path: PathBuf) -> io::Result<Self> {
-        Ok(Writer { hasher: Some(Hasher::new()), path, file })
+        Ok(Writer { hasher: Some(Hasher::default()), path, file })
     }
 
     /// Commits the written data to the repository. The `bool` is true iff the data was not already there.
