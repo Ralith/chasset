@@ -18,8 +18,8 @@ data-encoding = "2.1.1"
 serde = "1"
 serde_derive = "1"
 rand = "0.5"
-failure = "0.1"
-carchive = { git = "https://github.com/Ralith/carchive", rev = "27c003c6a4d10373ce674a0dbfd4e71db44a8e96" }
+err-derive = "0.1.5"
+carchive = { git = "https://github.com/Ralith/carchive", rev = "5495a78cda7dd753976d0132ba8939c0b32fcd98" }
 memmap = "0.6.2"
 
 [dev-dependencies]

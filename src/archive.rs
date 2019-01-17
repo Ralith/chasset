@@ -8,7 +8,6 @@ use std::fs::{self, File};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use failure::Fail;
 use memmap::Mmap;
 use carchive;
 
@@ -29,7 +28,7 @@ impl ArchiveSet {
             let file = File::open(entry.path())?;
             let map = ArcMap(Arc::new(unsafe { Mmap::map(&file) }?));
             let archive = carchive::Reader::new(map)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.compat()))?;
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             let kind = {
                 let x = archive.extensions(2).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid archive"))?;
                 HashKind::from_id(x[0] as u16 | (x[1] as u16) << 8).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "archive uses unknown hash kind"))?

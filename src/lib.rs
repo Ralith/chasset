@@ -9,7 +9,7 @@ extern crate serde;
 extern crate serde_derive;
 extern crate rand;
 #[macro_use]
-extern crate failure;
+extern crate err_derive;
 extern crate carchive;
 extern crate memmap;
 
@@ -62,18 +62,18 @@ impl Serialize for Hash {
 }
 
 /// Errors in the human-readable hash encoding.
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum HashParseError {
     /// Missing delimiting ":".
-    #[fail(display = "missing delimiting \":\"")]
+    #[error(display = "missing delimiting \":\"")]
     MissingDelimiter,
     /// Unknown hash kind.
     ///
     /// May occur when parsing a hash encoded by a future version of this library.
-    #[fail(display = "unknown hash kind: {}", _0)]
+    #[error(display = "unknown hash kind: {}", _0)]
     UnknownKind(String),
     /// Malformed base32 hash value.
-    #[fail(display = "malformed hash value: {}", _0)]
+    #[error(display = "malformed hash value: {}", _0)]
     MalformedValue(data_encoding::DecodeError),
 }
 
@@ -129,8 +129,8 @@ impl fmt::Display for Hash {
 }
 
 /// Unknown hash kind.
-#[derive(Debug, Fail)]
-#[fail(display = "invalid hash length for given hash kind")]
+#[derive(Debug, Error)]
+#[error(display = "invalid hash length for given hash kind")]
 pub struct InvalidLength;
 
 impl Hash {
@@ -199,8 +199,8 @@ impl fmt::Display for HashKind {
 }
 
 /// Unknown hash kind.
-#[derive(Debug, Fail)]
-#[fail(display = "unknown kind")]
+#[derive(Debug, Error)]
+#[error(display = "unknown kind")]
 pub struct UnknownKind;
 
 impl FromStr for HashKind {
