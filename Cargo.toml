@@ -21,6 +21,7 @@ rand = "0.5"
 err-derive = "0.1.5"
 carchive = { git = "https://github.com/Ralith/carchive", rev = "5495a78cda7dd753976d0132ba8939c0b32fcd98" }
 memmap = "0.6.2"
+byteorder = "1.2"
 
 [dev-dependencies]
 structopt = "0.2"

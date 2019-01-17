@@ -12,6 +12,7 @@ extern crate rand;
 extern crate err_derive;
 extern crate carchive;
 extern crate memmap;
+extern crate byteorder;
 
 pub mod loose_files;
 pub use loose_files::LooseFiles;
@@ -19,9 +20,10 @@ pub use loose_files::LooseFiles;
 pub mod archive;
 pub use archive::ArchiveSet;
 
-use std::{fmt, io};
+use std::{fmt, io, hash};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
 
 use blake2::digest::{Input, VariableOutput};
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
@@ -29,6 +31,7 @@ use serde::de::Error;
 use serde::ser::SerializeSeq;
 use memmap::Mmap;
 use data_encoding::{DecodeError, BASE32_NOPAD};
+use byteorder::{NativeEndian, ByteOrder};
 
 /// Size of output used for `HashKind::Blake2b`
 pub const BLAKE2B_LEN: usize = 25;
@@ -37,7 +40,7 @@ pub const BLAKE2B_LEN: usize = 25;
 ///
 /// Hashes have forwards-compatible serialization, and can be encoded in both binary and human-readable forms. New types
 /// of hash may be added in the future, but none will ever be removed.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Hash {
     /// A 200-bit blake2b hash.
     ///
@@ -83,6 +86,12 @@ impl FromStr for Hash {
         let delim = s.find(':').ok_or(HashParseError::MissingDelimiter)?;
         let kind = s[0..delim].parse().map_err(|UnknownKind| HashParseError::UnknownKind(s[0..delim].into()))?;
         Hash::parse(kind, &s[delim+1..]).map_err(HashParseError::MalformedValue)
+    }
+}
+
+impl hash::Hash for Hash {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(NativeEndian::read_u64(self.bytes()));
     }
 }
 
@@ -319,6 +328,37 @@ impl ::std::ops::Deref for Asset {
     fn deref(&self) -> &[u8] { &self.map[self.start..self.start+self.len] }
 }
 
+/// `Hasher` that yields a supplied u64 directly
+///
+/// Should only be used with types such as `Hash` whose `std::hash::Hash` impl emits a single
+/// randomly-distributed `u64`.
+#[derive(Debug, Clone, Default)]
+pub struct IdentityHasher(u64);
+
+impl IdentityHasher {
+    /// Use with a random `state` instead of `Default` to make storage order less predictable.
+    pub fn new(state: u64) -> Self {
+        IdentityHasher(state)
+    }
+}
+
+impl hash::Hasher for IdentityHasher {
+    fn finish(&self) -> u64 { self.0 }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut buf = [0; 8];
+        buf[0..bytes.len()].copy_from_slice(bytes);
+        self.write_u64(NativeEndian::read_u64(&buf));
+    }
+    fn write_u64(&mut self, i: u64) { self.0 ^= i; }
+}
+
+/// A table efficiently keyed by `Hash`
+pub type ContentMap<T> = HashMap<Hash, T, hash::BuildHasherDefault<IdentityHasher>>;
+
+/// A set efficiently keyed by `Hash`
+pub type ContentSet = HashSet<Hash, hash::BuildHasherDefault<IdentityHasher>>;
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -334,5 +374,13 @@ mod test {
     fn parse_err() {
         assert!(Hash::from_str("blake2b:00000").is_err());
         assert!(Hash::from_str("notarealhash:42").is_err());
+    }
+
+    #[test]
+    fn collection() {
+        let hash = Hash::Blake2b([0xAB; 25]);
+        let mut x = ContentSet::default();
+        x.insert(hash);
+        assert!(x.contains(&hash));
     }
 }
