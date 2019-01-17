@@ -2,16 +2,16 @@
 //!
 //! Uses `carchive` formatted files, with a 2-byte little-endian extension header identifying the hash kind.
 
-use std::path::Path;
-use std::io;
-use std::fs::{self, File};
 use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
-use memmap::Mmap;
 use carchive;
+use memmap::Mmap;
 
-use {Hash, HashKind, Asset};
+use {Asset, Hash, HashKind};
 
 /// A repository formed by a collection of archive files, each containing many assets.
 pub struct ArchiveSet {
@@ -30,11 +30,18 @@ impl ArchiveSet {
             let archive = carchive::Reader::new(map)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             let kind = {
-                let x = archive.extensions(2).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid archive"))?;
-                HashKind::from_id(x[0] as u16 | (x[1] as u16) << 8).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "archive uses unknown hash kind"))?
+                let x = archive
+                    .extensions(2)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid archive"))?;
+                HashKind::from_id(x[0] as u16 | (x[1] as u16) << 8).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "archive uses unknown hash kind")
+                })?
             };
             if kind.len() != archive.key_len() as usize {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "archive key length doesn't match hash type"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "archive key length doesn't match hash type",
+                ));
             }
             archives.entry(kind).or_insert_with(Vec::new).push(archive);
         }
@@ -50,7 +57,7 @@ impl ArchiveSet {
                     map: archive.get_ref().0.clone(),
                     start: base,
                     len: x.len(),
-                })
+                });
             }
         }
         None
@@ -60,16 +67,22 @@ impl ArchiveSet {
     ///
     /// This should only be used for diagnostic purposes. It almost never makes sense to access an asset you don't
     /// already know the hash of.
-    pub fn list<'a>(&'a self) -> impl Iterator<Item=Hash> + 'a {
-        self.archives.iter()
-            .flat_map(|(&kind, xs)| xs.iter().flat_map(move |archive| {
-                archive.iter().map(move |(key, _)| Hash::from_bytes(kind, key).expect("archives with invalid key lengths aren't opened"))
-            }))
+    pub fn list<'a>(&'a self) -> impl Iterator<Item = Hash> + 'a {
+        self.archives.iter().flat_map(|(&kind, xs)| {
+            xs.iter().flat_map(move |archive| {
+                archive.iter().map(move |(key, _)| {
+                    Hash::from_bytes(kind, key)
+                        .expect("archives with invalid key lengths aren't opened")
+                })
+            })
+        })
     }
 }
 
 struct ArcMap(Arc<Mmap>);
 
 impl AsRef<[u8]> for ArcMap {
-    fn as_ref(&self) -> &[u8] { self.0.as_ref() }
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
 }

@@ -2,8 +2,8 @@ extern crate chasset;
 #[macro_use]
 extern crate structopt;
 
-use std::path::PathBuf;
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 use structopt::StructOpt;
 
@@ -41,10 +41,12 @@ fn main() -> io::Result<()> {
         let repo = ArchiveSet::open(&opt.path)?;
         match opt.cmd {
             Command::Cat { hash: Some(x) } => {
-                let asset = repo.get(&x).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such asset"))?;
+                let asset = repo
+                    .get(&x)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such asset"))?;
                 io::stdout().write_all(&asset)?;
             }
-            Command::Cat { hash: None } => { eprintln!("archive sets are read-only") },
+            Command::Cat { hash: None } => eprintln!("archive sets are read-only"),
             Command::Ls => {
                 for x in repo.list() {
                     println!("{}", x);
@@ -54,7 +56,7 @@ fn main() -> io::Result<()> {
     } else {
         let repo = LooseFiles::open(opt.path.clone())?;
         match opt.cmd {
-            Command::Cat { hash } => { match hash {
+            Command::Cat { hash } => match hash {
                 None => {
                     let mut stage = repo.make_writer()?;
                     let stdin = io::stdin();
@@ -66,7 +68,7 @@ fn main() -> io::Result<()> {
                     let mut asset = repo.get(&x)?;
                     io::stdout().write_all(&asset)?;
                 }
-            }}
+            },
             Command::Ls => {
                 for x in repo.list() {
                     println!("{}", x);

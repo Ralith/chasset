@@ -1,15 +1,15 @@
 //! Tools for a repository that stores one file per asset.
 
-use std::path::{Path, PathBuf};
-use std::io;
 use std::fs::{self, File};
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use data_encoding::BASE32_NOPAD;
-use rand;
 use memmap::Mmap;
+use rand;
 
-use {Hash, HashKind, Hasher, Asset};
+use {Asset, Hash, HashKind, Hasher};
 
 /// A repository that stores each asset as a separate file.
 ///
@@ -61,14 +61,28 @@ impl LooseFiles {
         match fs::create_dir(&path) {
             Ok(()) => {}
             Err(ref e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => { return Err(e); }
+            Err(e) => {
+                return Err(e);
+            }
         }
         loop {
             path.push(format!("{:08X}", rand::random::<u64>()));
-            match fs::OpenOptions::new().read(false).write(true).create_new(true).open(&path) {
-                Ok(file) => { return Writer::new(file, path); }
-                Err(ref e) if e.kind() == io::ErrorKind::AlreadyExists => { path.pop(); continue; }
-                Err(e) => { return Err(e); }
+            match fs::OpenOptions::new()
+                .read(false)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => {
+                    return Writer::new(file, path);
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    path.pop();
+                    continue;
+                }
+                Err(e) => {
+                    return Err(e);
+                }
             }
         }
     }
@@ -84,8 +98,10 @@ impl LooseFiles {
     ///
     /// This should only be used for diagnostic purposes. It almost never makes sense to access an asset you don't
     /// already know the hash of.
-    pub fn list(&self) -> impl Iterator<Item=Hash> {
-        fs::read_dir(&self.prefix).ok().into_iter()
+    pub fn list(&self) -> impl Iterator<Item = Hash> {
+        fs::read_dir(&self.prefix)
+            .ok()
+            .into_iter()
             .flat_map(|x| x.flat_map(|result| result.into_iter()))
             .filter_map(|x| {
                 let name = x.file_name();
@@ -99,29 +115,45 @@ impl LooseFiles {
     }
 }
 
-fn list_hash(hash_dir: PathBuf) -> impl Iterator<Item=Hash> {
-    hash_dir.file_name().unwrap().to_str().map(|x| x.to_string()).into_iter()
+fn list_hash(hash_dir: PathBuf) -> impl Iterator<Item = Hash> {
+    hash_dir
+        .file_name()
+        .unwrap()
+        .to_str()
+        .map(|x| x.to_string())
+        .into_iter()
         .flat_map(|x| x.parse::<HashKind>().into_iter())
         .flat_map(move |kind| {
-            fs::read_dir(&hash_dir).into_iter()
+            fs::read_dir(&hash_dir)
+                .into_iter()
                 .flat_map(|x| x.into_iter())
                 .flat_map(|x| x.into_iter())
                 .flat_map(move |x| list_leaf(kind, x.path()))
         })
 }
 
-fn list_leaf(kind: HashKind, leaf_dir: PathBuf) -> impl Iterator<Item=Hash> {
-    leaf_dir.file_name().unwrap().to_str().map(|x| x.to_string()).into_iter()
+fn list_leaf(kind: HashKind, leaf_dir: PathBuf) -> impl Iterator<Item = Hash> {
+    leaf_dir
+        .file_name()
+        .unwrap()
+        .to_str()
+        .map(|x| x.to_string())
+        .into_iter()
         .flat_map(move |start| {
-            fs::read_dir(&leaf_dir).into_iter()
+            fs::read_dir(&leaf_dir)
+                .into_iter()
                 .flat_map(|x| x.into_iter())
                 .flat_map(|x| x.into_iter())
                 .flat_map(move |file| {
                     let start = start.clone();
-                    file.file_name().to_str().map(|name| {
-                        let full = start.to_owned() + name;
-                        Hash::parse(kind, &full).into_iter()
-                    }).into_iter().flat_map(|x| x)
+                    file.file_name()
+                        .to_str()
+                        .map(|name| {
+                            let full = start.to_owned() + name;
+                            Hash::parse(kind, &full).into_iter()
+                        })
+                        .into_iter()
+                        .flat_map(|x| x)
                 })
         })
 }
@@ -147,13 +179,19 @@ pub struct Writer {
 
 impl Drop for Writer {
     fn drop(&mut self) {
-        if self.hasher.is_some() { let _ = fs::remove_file(&self.path); }
+        if self.hasher.is_some() {
+            let _ = fs::remove_file(&self.path);
+        }
     }
 }
 
 impl Writer {
     fn new(file: File, path: PathBuf) -> io::Result<Self> {
-        Ok(Writer { hasher: Some(Hasher::default()), path, file })
+        Ok(Writer {
+            hasher: Some(Hasher::default()),
+            path,
+            file,
+        })
     }
 
     /// Commits the written data to the repository. The `bool` is true iff the data was not already there.
