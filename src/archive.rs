@@ -11,7 +11,7 @@ use std::sync::Arc;
 use carchive;
 use memmap::Mmap;
 
-use {Asset, Hash, HashKind};
+use crate::{Asset, Hash, HashKind};
 
 /// A repository formed by a collection of archive files, each containing many assets.
 pub struct ArchiveSet {

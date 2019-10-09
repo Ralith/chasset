@@ -9,7 +9,7 @@ use data_encoding::BASE32_NOPAD;
 use memmap::Mmap;
 use rand;
 
-use {Asset, Hash, HashKind, Hasher};
+use crate::{Asset, Hash, HashKind, Hasher};
 
 /// A repository that stores each asset as a separate file.
 ///

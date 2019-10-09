@@ -2,22 +2,12 @@
 
 #![warn(missing_docs)]
 
-extern crate blake2;
-extern crate data_encoding;
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
-extern crate rand;
-#[macro_use]
-extern crate err_derive;
-extern crate byteorder;
-extern crate carchive;
-extern crate memmap;
-
 pub mod loose_files;
 pub use loose_files::LooseFiles;
 
+#[cfg(feature = "carchive")]
 pub mod archive;
+#[cfg(feature = "carchive")]
 pub use archive::ArchiveSet;
 
 use std::collections::{HashMap, HashSet};
@@ -26,8 +16,10 @@ use std::sync::Arc;
 use std::{fmt, hash, io};
 
 use blake2::digest::{Input, VariableOutput};
+use blake2::VarBlake2b;
 use byteorder::{ByteOrder, NativeEndian};
 use data_encoding::{DecodeError, BASE32_NOPAD};
+use err_derive::Error;
 use memmap::Mmap;
 use serde::de::Error;
 use serde::ser::SerializeSeq;
@@ -286,19 +278,13 @@ impl HashKind {
     }
 }
 
-/// Helper to compute a hash of the currently recommended type.
+/// Helper to compute a hash of the recommended type.
 #[derive(Debug, Clone)]
-pub struct Hasher(HasherInner);
-
-#[derive(Debug, Clone)]
-enum HasherInner {
-    /// Blake2b hasher
-    Blake2b(blake2::Blake2b),
-}
+pub struct Hasher(VarBlake2b);
 
 impl Default for Hasher {
     fn default() -> Self {
-        Self::new(HashKind::default())
+        Self::new()
     }
 }
 
@@ -315,36 +301,18 @@ impl io::Write for Hasher {
 
 impl Hasher {
     /// Create an empty hasher.
-    pub fn new(kind: HashKind) -> Self {
-        use self::HasherInner::*;
-        Hasher(match kind {
-            HashKind::Blake2b => Blake2b(blake2::Blake2b::new(BLAKE2B_LEN).unwrap()),
-        })
+    pub fn new() -> Self {
+        Hasher(VarBlake2b::new(BLAKE2B_LEN).unwrap())
     }
     /// Incrementally hash `bytes`.
     pub fn process(&mut self, bytes: &[u8]) {
-        use self::HasherInner::*;
-        match &mut self.0 {
-            Blake2b(x) => x.process(bytes),
-        }
+        self.0.input(bytes);
     }
     /// Get the hash of all `process`ed bytes.
     pub fn result(self) -> Hash {
-        use self::HasherInner::*;
-        match self.0 {
-            Blake2b(x) => {
-                let mut buf = [0; BLAKE2B_LEN];
-                x.variable_result(&mut buf).unwrap();
-                Hash::Blake2b(buf)
-            }
-        }
-    }
-    /// Get the kind of hash being computed
-    pub fn kind(&self) -> HashKind {
-        use self::HasherInner::*;
-        match &self.0 {
-            Blake2b(_) => HashKind::Blake2b,
-        }
+        let mut buf = [0; BLAKE2B_LEN];
+        self.0.variable_result(|x| buf.copy_from_slice(x));
+        Hash::Blake2b(buf)
     }
 }
 
